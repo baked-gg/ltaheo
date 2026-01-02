@@ -5,7 +5,7 @@ from collections import defaultdict
 import statistics
 import traceback
 
-from database import get_db_connection
+from database import get_db_connection, get_cursor, get_placeholder
 from scrims_logic import log_message
 from tournament_logic import TEAM_TAG_TO_FULL_NAME, UNKNOWN_BLUE_TAG, UNKNOWN_RED_TAG
 
@@ -26,15 +26,15 @@ def get_objects_data(selected_team_full_name):
     }
 
     try:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
 
         cursor.execute(f"""
-            SELECT DISTINCT Blue_Team_Name as team_tag FROM tournament_games
-            WHERE Blue_Team_Name NOT IN ('{UNKNOWN_BLUE_TAG}', 'Blue Team')
+            SELECT DISTINCT "Blue_Team_Name" as team_tag FROM tournament_games
+            WHERE "Blue_Team_Name" NOT IN ({get_placeholder()}, 'Blue Team')
             UNION
-            SELECT DISTINCT Red_Team_Name as team_tag FROM tournament_games
-            WHERE Red_Team_Name NOT IN ('{UNKNOWN_RED_TAG}', 'Red Team')
-        """)
+            SELECT DISTINCT "Red_Team_Name" as team_tag FROM tournament_games
+            WHERE "Red_Team_Name" NOT IN ({get_placeholder()}, 'Red Team')
+        """, (UNKNOWN_BLUE_TAG, UNKNOWN_RED_TAG))
         all_teams_tags = {row['team_tag'] for row in cursor.fetchall() if row['team_tag']}
         all_teams_display = sorted(list(set([TEAM_TAG_TO_FULL_NAME.get(tag, tag) for tag in all_teams_tags])))
 
@@ -50,7 +50,7 @@ def get_objects_data(selected_team_full_name):
         if not selected_team_tag:
             stats["error"] = f"Team tag not found for '{selected_team_full_name}'."; return all_teams_display, stats
 
-        cursor.execute("SELECT * FROM tournament_games WHERE Blue_Team_Name = ? OR Red_Team_Name = ?", (selected_team_tag, selected_team_tag))
+        cursor.execute(f"SELECT * FROM tournament_games WHERE \"Blue_Team_Name\" = {get_placeholder()} OR \"Red_Team_Name\" = {get_placeholder()}", (selected_team_tag, selected_team_tag))
         games = [dict(row) for row in cursor.fetchall()]
         
         if not games:
@@ -58,8 +58,8 @@ def get_objects_data(selected_team_full_name):
             return all_teams_display, stats
             
         game_ids = [game["Game_ID"] for game in games]
-        placeholders = ','.join(['?'] * len(game_ids))
-        cursor.execute(f"SELECT * FROM objective_events WHERE game_id IN ({placeholders}) ORDER BY timestamp_ms ASC", game_ids)
+        placeholders = ','.join([get_placeholder()] * len(game_ids))
+        cursor.execute(f"SELECT * FROM objective_events WHERE \"game_id\" IN ({placeholders}) ORDER BY \"timestamp_ms\" ASC", game_ids)
         events = [dict(row) for row in cursor.fetchall()]
 
         _process_side_data(games, events, selected_team_tag, "overall", stats["overall"])

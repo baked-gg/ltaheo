@@ -5,7 +5,7 @@ import json
 from collections import defaultdict
 # <<< ИЗМЕНЕНИЯ: Добавлены импорты для генерации иконок
 from scrims_logic import log_message, get_champion_data, get_champion_icon_html
-from database import get_db_connection
+from database import get_db_connection, get_cursor, get_placeholder
 from tournament_logic import TEAM_TAG_TO_FULL_NAME, UNKNOWN_BLUE_TAG, UNKNOWN_RED_TAG
 
 def get_start_positions_data(selected_team_full_name, selected_champion, games_filter):
@@ -24,16 +24,15 @@ def get_start_positions_data(selected_team_full_name, selected_champion, games_f
     available_champions = ["All"]
 
     try:
-        cursor = conn.cursor()
-        
+        cursor = get_cursor(conn)
         # 1. Получаем список всех команд
         cursor.execute(f"""
-            SELECT DISTINCT Blue_Team_Name as team_tag FROM tournament_games
-            WHERE Blue_Team_Name NOT IN ('{UNKNOWN_BLUE_TAG}', 'Blue Team')
+            SELECT DISTINCT "Blue_Team_Name" as team_tag FROM tournament_games
+            WHERE "Blue_Team_Name" NOT IN ({get_placeholder()}, 'Blue Team')
             UNION
-            SELECT DISTINCT Red_Team_Name as team_tag FROM tournament_games
-            WHERE Red_Team_Name NOT IN ('{UNKNOWN_RED_TAG}', 'Red Team')
-        """)
+            SELECT DISTINCT "Red_Team_Name" as team_tag FROM tournament_games
+            WHERE "Red_Team_Name" NOT IN ({get_placeholder()}, 'Red Team')
+        """, (UNKNOWN_BLUE_TAG, UNKNOWN_RED_TAG))
         all_teams_tags = {row['team_tag'] for row in cursor.fetchall() if row['team_tag']}
         all_teams_display = sorted(list(set([TEAM_TAG_TO_FULL_NAME.get(tag, tag) for tag in all_teams_tags])))
 
@@ -55,31 +54,31 @@ def get_start_positions_data(selected_team_full_name, selected_champion, games_f
             return all_teams_display, stats, available_champions
 
         # 3. Получаем список доступных чемпионов для фильтра
-        champs_query = """
+        champs_query = f"""
             SELECT DISTINCT champ FROM (
-                SELECT Blue_TOP_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL
-                SELECT Blue_JGL_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL
-                SELECT Blue_MID_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL
-                SELECT Blue_BOT_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL
-                SELECT Blue_SUP_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL
-                SELECT Red_TOP_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag UNION ALL
-                SELECT Red_JGL_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag UNION ALL
-                SELECT Red_MID_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag UNION ALL
-                SELECT Red_BOT_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag UNION ALL
-                SELECT Red_SUP_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag
+                SELECT "Blue_TOP_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Blue_JGL_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Blue_MID_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Blue_BOT_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Blue_SUP_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Red_TOP_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Red_JGL_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Red_MID_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Red_BOT_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()} UNION ALL
+                SELECT "Red_SUP_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()}
             ) WHERE champ IS NOT NULL AND champ != 'N/A' ORDER BY champ ASC
         """
-        cursor.execute(champs_query, {'tag': selected_team_tag})
+        cursor.execute(champs_query, [selected_team_tag] * 10)
         available_champions.extend([row['champ'] for row in cursor.fetchall()])
 
         # 4. Получаем последние игры
-        query_games = "SELECT * FROM tournament_games WHERE (Blue_Team_Name = ? OR Red_Team_Name = ?)"
+        query_games = f"SELECT * FROM tournament_games WHERE (\"Blue_Team_Name\" = {get_placeholder()} OR \"Red_Team_Name\" = {get_placeholder()})"
         params_games = [selected_team_tag, selected_team_tag]
         
         if selected_champion and selected_champion != "All":
-            champion_filter_sql = """
-             AND (? IN (Blue_TOP_Champ, Blue_JGL_Champ, Blue_MID_Champ, Blue_BOT_Champ, Blue_SUP_Champ,
-                        Red_TOP_Champ, Red_JGL_Champ, Red_MID_Champ, Red_BOT_Champ, Red_SUP_Champ))
+            champion_filter_sql = f"""
+             AND ({get_placeholder()} IN ("Blue_TOP_Champ", "Blue_JGL_Champ", "Blue_MID_Champ", "Blue_BOT_Champ", "Blue_SUP_Champ",
+                        "Red_TOP_Champ", "Red_JGL_Champ", "Red_MID_Champ", "Red_BOT_Champ", "Red_SUP_Champ"))
             """
             query_games += champion_filter_sql
             params_games.append(selected_champion)
@@ -100,12 +99,12 @@ def get_start_positions_data(selected_team_full_name, selected_champion, games_f
         # 5. Извлекаем данные о позициях для этих игр до 01:40 (100000 мс)
         positions_data = defaultdict(lambda: defaultdict(list))
         if game_ids_to_query:
-            placeholders = ','.join(['?'] * len(game_ids_to_query))
+            placeholders = ','.join([get_placeholder()] * len(game_ids_to_query))
             pos_query = f"""
-                SELECT game_id, timestamp_ms, player_puuid, pos_x, pos_z
+                SELECT "game_id", "timestamp_ms", "player_puuid", "pos_x", "pos_z"
                 FROM player_positions_timeline
-                WHERE game_id IN ({placeholders}) AND timestamp_ms <= 100000
-                ORDER BY timestamp_ms
+                WHERE "game_id" IN ({placeholders}) AND "timestamp_ms" <= 100000
+                ORDER BY "timestamp_ms"
             """
             cursor.execute(pos_query, game_ids_to_query)
             for row in cursor.fetchall():

@@ -9,7 +9,7 @@ from collections import defaultdict
 import sqlite3
 # Убедитесь, что database.py находится там, где его можно импортировать
 # Возможно, потребуется from .database import ... если структура проекта изменилась
-from database import get_db_connection, SCRIMS_HEADER
+from database import get_db_connection, SCRIMS_HEADER, get_cursor, get_placeholder
 import math # Для округления
 
 # --- КОНСТАНТЫ (HLL) ---
@@ -222,13 +222,13 @@ def fetch_and_store_scrims():
 
     conn = get_db_connection()
     if not conn: log_message("DB Connection failed for scrim update."); return -1 # Возвращаем -1 при ошибке БД
-    cursor = conn.cursor()
+    cursor = get_cursor(conn)
 
     try:
-        cursor.execute("SELECT Game_ID FROM scrims")
+        cursor.execute("SELECT \"Game_ID\" FROM scrims")
         existing_game_ids = {row['Game_ID'] for row in cursor.fetchall()}
         log_message(f"Found {len(existing_game_ids)} existing game IDs in DB.")
-    except sqlite3.Error as e:
+    except Exception as e:
         log_message(f"Error reading existing game IDs: {e}. Proceeding without duplicate check.")
         existing_game_ids = set()
 
@@ -237,8 +237,13 @@ def fetch_and_store_scrims():
     sql_column_names = [hdr.replace(" ", "_").replace(".", "").replace("-", "_") for hdr in SCRIMS_HEADER]
     quoted_column_names = [f'"{col}"' for col in sql_column_names]
     columns_string = ', '.join(quoted_column_names)
-    sql_placeholders = ", ".join(["?"] * len(sql_column_names))
-    insert_sql = f"INSERT OR IGNORE INTO scrims ({columns_string}) VALUES ({sql_placeholders})"
+    sql_placeholders = ", ".join([get_placeholder()] * len(sql_column_names))
+    
+    insert_prefix = "INSERT INTO" if get_placeholder() == "%s" else "INSERT OR IGNORE INTO"
+    insert_sql = f"{insert_prefix} scrims ({columns_string}) VALUES ({sql_placeholders})"
+    if get_placeholder() == "%s":
+         update_parts = [f'"{col}" = EXCLUDED."{col}"' for col in sql_column_names if col != 'Game_ID']
+         insert_sql += f" ON CONFLICT (\"Game_ID\") DO UPDATE SET {', '.join(update_parts)}"
 
     for series_summary in series_list:
         processed_series_count += 1
@@ -332,17 +337,21 @@ def fetch_and_store_scrims():
                 try:
                     cursor.execute(insert_sql, data_tuple)
                     if cursor.rowcount > 0: added_count += 1; existing_game_ids.add(game_id)
-                except sqlite3.Error as e: log_message(f"DB Insert Error G:{game_id}: {e}")
+                except Exception as e: log_message(f"DB Insert Error G:{game_id}: {e}")
 
             except Exception as e:
                 log_message(f"Parse/Process fail G:{game_id}: {e}"); import traceback; log_message(traceback.format_exc()); continue
             finally: time.sleep(API_REQUEST_DELAY / 4)
-        try: conn.commit() # Commit after each series
-        except sqlite3.Error as e: log_message(f"DB Commit Error after S:{series_id}: {e}")
+        try: 
+            if not get_placeholder() == "%s":
+                conn.commit() # Commit after each series
+        except Exception as e: log_message(f"DB Commit Error after S:{series_id}: {e}")
         time.sleep(API_REQUEST_DELAY / 2)
 
-    try: conn.commit() # Final commit
-    except sqlite3.Error as e: log_message(f"DB Final Commit Error: {e}")
+    try: 
+        if not get_placeholder() == "%s":
+            conn.commit() # Final commit
+    except Exception as e: log_message(f"DB Final Commit Error: {e}")
     finally: conn.close()
 
     log_message(f"Scrims update finished. Added {added_count} new game(s).")
@@ -519,14 +528,14 @@ def aggregate_scrim_data(time_filter="All Time", side_filter="all"):
         elif time_filter == "2 Months": delta = timedelta(days=60)
         if delta:
             cutoff_date = (now_utc - delta).strftime("%Y-%m-%d %H:%M:%S")
-            where_clause = "WHERE \"Date\" >= ?"
+            where_clause = f"WHERE \"Date\" >= {get_placeholder()}"
             params.append(cutoff_date)
             log_message(f"Applying time filter: Date >= {cutoff_date}")
         else: log_message(f"Warning: Unknown time filter '{time_filter}'.")
 
     all_scrim_data = []
     try:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         select_all_sql = f"SELECT * FROM scrims {where_clause} ORDER BY \"Date\" DESC"
         cursor.execute(select_all_sql, params)
         all_scrim_data = cursor.fetchall()
