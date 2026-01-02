@@ -7,7 +7,7 @@ import sys
 from datetime import datetime, timezone
 
 _basedir = os.path.abspath(os.path.dirname(__file__))
-DATABASE_PATH = os.path.join(_basedir, 'scrims_data.db')
+DATABASE_PATH = os.path.join(_basedir, '/data/scrims_data.db')
 
 # --- Заголовки таблиц ---
 SCRIMS_HEADER = [
