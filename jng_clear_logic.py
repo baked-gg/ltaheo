@@ -6,7 +6,7 @@ from collections import defaultdict
 import math
 
 # Импорты из существующих модулей вашего проекта
-from database import get_db_connection, get_cursor, get_placeholder
+from database import get_db_connection
 from scrims_logic import log_message, get_champion_icon_html, get_champion_data
 from tournament_logic import TEAM_TAG_TO_FULL_NAME, UNKNOWN_BLUE_TAG, UNKNOWN_RED_TAG
 
@@ -42,16 +42,16 @@ def get_jng_clear_data(selected_team_full_name, selected_champion):
     available_champions = ["All"]
 
     try:
-        cursor = get_cursor(conn)
+        cursor = conn.cursor()
 
         # 1. Получаем список всех команд
         cursor.execute(f"""
-            SELECT DISTINCT "Blue_Team_Name" as team_tag FROM tournament_games
-            WHERE "Blue_Team_Name" NOT IN ({get_placeholder()}, 'Blue Team')
+            SELECT DISTINCT Blue_Team_Name as team_tag FROM tournament_games
+            WHERE Blue_Team_Name NOT IN ('{UNKNOWN_BLUE_TAG}', 'Blue Team')
             UNION
-            SELECT DISTINCT "Red_Team_Name" as team_tag FROM tournament_games
-            WHERE "Red_Team_Name" NOT IN ({get_placeholder()}, 'Red Team')
-        """, (UNKNOWN_BLUE_TAG, UNKNOWN_RED_TAG))
+            SELECT DISTINCT Red_Team_Name as team_tag FROM tournament_games
+            WHERE Red_Team_Name NOT IN ('{UNKNOWN_RED_TAG}', 'Red Team')
+        """)
         all_teams_tags = {row['team_tag'] for row in cursor.fetchall() if row['team_tag']}
         all_teams_display = sorted(list(set([TEAM_TAG_TO_FULL_NAME.get(tag, tag) for tag in all_teams_tags])))
 
@@ -69,22 +69,22 @@ def get_jng_clear_data(selected_team_full_name, selected_champion):
             stats["error"] = f"Team tag not found for '{selected_team_full_name}'."; return all_teams_display, stats, available_champions
 
         # 3. Получаем чемпионов-лесников для фильтра
-        champs_query = f"""
-            SELECT DISTINCT champ FROM (SELECT "Blue_JGL_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL SELECT "Red_JGL_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()}) 
+        champs_query = """
+            SELECT DISTINCT champ FROM (SELECT Blue_JGL_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL SELECT Red_JGL_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag) 
             WHERE champ IS NOT NULL AND champ != 'N/A' ORDER BY champ ASC
         """
-        cursor.execute(champs_query, (selected_team_tag, selected_team_tag))
+        cursor.execute(champs_query, {'tag': selected_team_tag})
         available_champions.extend([row['champ'] for row in cursor.fetchall()])
 
         # 4. Получаем игры и данные о путях
-        query_games = f'SELECT * FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} OR "Red_Team_Name" = {get_placeholder()}'
+        query_games = "SELECT * FROM tournament_games WHERE Blue_Team_Name = ? OR Red_Team_Name = ?"
         cursor.execute(query_games, [selected_team_tag, selected_team_tag])
         game_rows = [dict(row) for row in cursor.fetchall()]
         if not game_rows:
             stats["message"] = "No games found for the selected team."; return all_teams_display, stats, available_champions
 
         game_ids = [game["Game_ID"] for game in game_rows]
-        paths_query = f"SELECT \"game_id\", \"player_puuid\", \"path_sequence\" FROM jungle_pathing WHERE \"game_id\" IN ({','.join([get_placeholder()]*len(game_ids))})"
+        paths_query = f"SELECT game_id, player_puuid, path_sequence FROM jungle_pathing WHERE game_id IN ({','.join(['?']*len(game_ids))})"
         cursor.execute(paths_query, game_ids)
         paths_data = {(row['game_id'], row['player_puuid']): json.loads(row['path_sequence']) for row in cursor.fetchall()}
 

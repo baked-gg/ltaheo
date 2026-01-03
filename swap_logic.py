@@ -10,7 +10,7 @@ except ImportError:
     SHAPELY_AVAILABLE = False
     Point, Polygon = None, None
 
-from database import get_db_connection, get_cursor, get_placeholder
+from database import get_db_connection
 from scrims_logic import log_message
 from tournament_logic import TEAM_TAG_TO_FULL_NAME, UNKNOWN_BLUE_TAG, UNKNOWN_RED_TAG, rift_zones, rift_zone_polygons_list
 
@@ -87,15 +87,15 @@ def get_swap_data(selected_team_full_name, selected_champion, games_filter):
     }
 
     try:
-        cursor = get_cursor(conn)
+        cursor = conn.cursor()
         
         cursor.execute(f"""
-            SELECT DISTINCT "Blue_Team_Name" as team_tag FROM tournament_games
-            WHERE "Blue_Team_Name" NOT IN ({get_placeholder()}, 'Blue Team')
+            SELECT DISTINCT Blue_Team_Name as team_tag FROM tournament_games
+            WHERE Blue_Team_Name NOT IN ('{UNKNOWN_BLUE_TAG}', 'Blue Team')
             UNION
-            SELECT DISTINCT "Red_Team_Name" as team_tag FROM tournament_games
-            WHERE "Red_Team_Name" NOT IN ({get_placeholder()}, 'Red Team')
-        """, (UNKNOWN_BLUE_TAG, UNKNOWN_RED_TAG))
+            SELECT DISTINCT Red_Team_Name as team_tag FROM tournament_games
+            WHERE Red_Team_Name NOT IN ('{UNKNOWN_RED_TAG}', 'Red Team')
+        """)
         all_teams_tags = {row['team_tag'] for row in cursor.fetchall() if row['team_tag']}
         all_teams_display = sorted(list(set([TEAM_TAG_TO_FULL_NAME.get(tag, tag) for tag in all_teams_tags])))
 
@@ -113,24 +113,24 @@ def get_swap_data(selected_team_full_name, selected_champion, games_filter):
             stats["error"] = f"Team tag not found for '{selected_team_full_name}'."
             return all_teams_display, stats, available_champions
         
-        champs_query = f"""
+        champs_query = """
             SELECT DISTINCT champ FROM (
-                SELECT "Blue_TOP_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL
-                SELECT "Blue_BOT_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL
-                SELECT "Blue_SUP_Champ" as champ FROM tournament_games WHERE "Blue_Team_Name" = {get_placeholder()} UNION ALL
-                SELECT "Red_TOP_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()} UNION ALL
-                SELECT "Red_BOT_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()} UNION ALL
-                SELECT "Red_SUP_Champ" as champ FROM tournament_games WHERE "Red_Team_Name" = {get_placeholder()}
+                SELECT Blue_TOP_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL
+                SELECT Blue_BOT_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL
+                SELECT Blue_SUP_Champ as champ FROM tournament_games WHERE Blue_Team_Name = :tag UNION ALL
+                SELECT Red_TOP_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag UNION ALL
+                SELECT Red_BOT_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag UNION ALL
+                SELECT Red_SUP_Champ as champ FROM tournament_games WHERE Red_Team_Name = :tag
             ) WHERE champ IS NOT NULL AND champ != 'N/A' ORDER BY champ ASC
         """
-        cursor.execute(champs_query, [selected_team_tag] * 6)
+        cursor.execute(champs_query, {'tag': selected_team_tag})
         available_champions.extend([row['champ'] for row in cursor.fetchall()])
 
-        query_games = f"SELECT * FROM tournament_games WHERE (\"Blue_Team_Name\" = {get_placeholder()} OR \"Red_Team_Name\" = {get_placeholder()})"
+        query_games = "SELECT * FROM tournament_games WHERE (Blue_Team_Name = ? OR Red_Team_Name = ?)"
         params_games = [selected_team_tag, selected_team_tag]
         
         if selected_champion and selected_champion != "All":
-            query_games += f" AND ({get_placeholder()} IN (\"Blue_TOP_Champ\", \"Blue_BOT_Champ\", \"Blue_SUP_Champ\", \"Red_TOP_Champ\", \"Red_BOT_Champ\", \"Red_SUP_Champ\"))"
+            query_games += " AND (? IN (Blue_TOP_Champ, Blue_BOT_Champ, Blue_SUP_Champ, Red_TOP_Champ, Red_BOT_Champ, Red_SUP_Champ))"
             params_games.append(selected_champion)
 
         query_games += ' ORDER BY "Date" DESC'
@@ -160,11 +160,11 @@ def get_swap_data(selected_team_full_name, selected_champion, games_filter):
 
         all_positions = []
         if game_ids_to_query:
-            placeholders = ','.join([get_placeholder()] * len(game_ids_to_query))
+            placeholders = ','.join(['?'] * len(game_ids_to_query))
             pos_query = f"""
-                SELECT "timestamp_ms", "player_puuid", "pos_x", "pos_z"
+                SELECT timestamp_ms, player_puuid, pos_x, pos_z
                 FROM player_positions_timeline
-                WHERE "game_id" IN ({placeholders}) AND "timestamp_ms" BETWEEN 180000 AND 420000
+                WHERE game_id IN ({placeholders}) AND timestamp_ms BETWEEN 180000 AND 420000
             """
             cursor.execute(pos_query, game_ids_to_query)
             all_positions = cursor.fetchall()

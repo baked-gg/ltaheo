@@ -1560,11 +1560,11 @@ def fetch_and_store_ward_data():
     
     games_to_process = []
     try:
-        cursor = get_cursor(conn)
+        cursor = conn.cursor()
         cursor.execute('SELECT "Game_ID", "Series_ID", "Sequence_Number" FROM tournament_games')
         games_to_process = cursor.fetchall()
         log_message(f"Found {len(games_to_process)} games in DB to check for ward data.")
-    except Exception as e:
+    except sqlite3.Error as e:
         log_message(f"Ward Update: Error fetching games from DB: {e}")
         conn.close()
         return -1
@@ -2026,18 +2026,18 @@ def aggregate_tournament_data(selected_team_full_name=None, side_filter="all"):
                     all_puuids_of_selected_team_in_these_games.update(detail_entry_temp.get("selected_team_puuids_in_game", []))
 
                 if all_puuids_of_selected_team_in_these_games:
-                    placeholders_fw_games = ','.join([get_placeholder()] * len(game_ids_for_team_view))
-                    placeholders_fw_puuids = ','.join([get_placeholder()] * len(all_puuids_of_selected_team_in_these_games))
+                    placeholders_fw_games = ','.join(['?'] * len(game_ids_for_team_view))
+                    placeholders_fw_puuids = ','.join(['?'] * len(all_puuids_of_selected_team_in_these_games))
 
                     ward_query_sql = f"""
-                        SELECT "game_id", "player_puuid", "participant_id", "player_name", "champion_name", "ward_type",
-                               "timestamp_seconds", "pos_x", "pos_z"
+                        SELECT game_id, player_puuid, participant_id, player_name, champion_name, ward_type,
+                               timestamp_seconds, pos_x, pos_z
                         FROM first_wards_data
-                        WHERE "game_id" IN ({placeholders_fw_games}) AND "player_puuid" IN ({placeholders_fw_puuids})
+                        WHERE game_id IN ({placeholders_fw_games}) AND player_puuid IN ({placeholders_fw_puuids})
                     """
                     ward_params = tuple(game_ids_for_team_view) + tuple(list(all_puuids_of_selected_team_in_these_games))
 
-                    ward_cursor = get_cursor(conn)
+                    ward_cursor = conn.cursor()
                     ward_cursor.execute(ward_query_sql, ward_params)
                     for row in ward_cursor.fetchall():
                         gid = row['game_id']
@@ -2425,8 +2425,8 @@ def get_proximity_data(selected_team_full_name, selected_role, games_filter):
         
         # 5. Извлекаем все данные о позициях для этих игр
         game_ids_list = list(game_info.keys())
-        placeholders = ','.join([get_placeholder()] * len(game_ids_list))
-        pos_query = f"SELECT * FROM player_positions_timeline WHERE \"game_id\" IN ({placeholders}) ORDER BY \"timestamp_ms\""
+        placeholders = ','.join(['?'] * len(game_ids_list))
+        pos_query = f"SELECT * FROM player_positions_timeline WHERE game_id IN ({placeholders}) ORDER BY timestamp_ms"
         cursor.execute(pos_query, game_ids_list)
         
         positions_by_game_time = defaultdict(lambda: defaultdict(list))
