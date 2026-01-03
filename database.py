@@ -6,8 +6,15 @@ import os
 import sys
 from datetime import datetime, timezone
 
-_basedir = os.path.abspath(os.path.dirname(__file__))
-DATABASE_PATH = os.path.join(_basedir, '/data/scrims_data.db')
+# Import configuration
+try:
+    from config import config, DATABASE_PATH
+except ImportError:
+    # Fallback if config.py is not available
+    _basedir = os.path.abspath(os.path.dirname(__file__))
+    # FIXED: Correct path joining without leading slash
+    DATABASE_PATH = os.path.join(_basedir, 'data', 'scrims_data.db')
+    print(f"Warning: Using fallback database path: {DATABASE_PATH}")
 
 # --- Заголовки таблиц ---
 SCRIMS_HEADER = [
@@ -41,7 +48,8 @@ TOURNAMENT_GAMES_HEADER_BASE = [
 ]
 draft_action_columns = []
 for i in range(1, 21):
-    draft_action_columns.extend([ f"Draft_Action_{i}_Type", f"Draft_Action_{i}_TeamID", f"Draft_Action_{i}_ChampName", f"Draft_Action_{i}_ChampID", f"Draft_Action_{i}_ActionID" ])
+    draft_action_columns.extend([f"Draft_Action_{i}_Type", f"Draft_Action_{i}_TeamID", f"Draft_Action_{i}_ChampName",
+                                 f"Draft_Action_{i}_ChampID", f"Draft_Action_{i}_ActionID"])
 TOURNAMENT_GAMES_HEADER = TOURNAMENT_GAMES_HEADER_BASE + draft_action_columns
 
 SOLOQ_GAMES_HEADER = [
@@ -51,22 +59,45 @@ SOLOQ_GAMES_HEADER = [
 
 manual_draft_action_headers = [f"action_{i}_champion" for i in range(1, 21)]
 MANUAL_DRAFTS_HEADER = [
-    "id", "filter_team_name", "game_index", "blue_team_editable_name",
-    "red_team_editable_name",
-] + manual_draft_action_headers + ["last_updated"]
+                           "id", "filter_team_name", "game_index", "blue_team_editable_name",
+                           "red_team_editable_name",
+                       ] + manual_draft_action_headers + ["last_updated"]
+
 
 def get_db_connection():
-    """Создает и возвращает соединение с базой данных SQLite."""
+    """Creates and returns a connection to the SQLite database with improved error handling."""
     conn = None
     try:
+        # Ensure the directory exists
+        db_dir = os.path.dirname(DATABASE_PATH)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            print(f"Created database directory: {db_dir}")
+
         conn = sqlite3.connect(DATABASE_PATH, timeout=10.0)
         conn.row_factory = sqlite3.Row
+        print(f"Database connection established: {DATABASE_PATH}")
     except sqlite3.Error as e:
-        print(f"Ошибка подключения к SQLite: {e}")
+        print(f"ERROR: SQLite connection failed: {e}")
+        print(f"Attempted path: {DATABASE_PATH}")
+    except Exception as e:
+        print(f"ERROR: Unexpected error during database connection: {e}")
     return conn
 
+
 def create_table_from_header(cursor, table_name, header_list, primary_key_column="Game ID"):
-    """Вспомогательная функция для создания таблицы по списку заголовков."""
+    """Helper function to create a table from header list with validation."""
+    # Security: Validate table name against whitelist
+    ALLOWED_TABLES = {
+        'scrims', 'tournament_games', 'soloq_games', 'manual_drafts',
+        'schedule_entries', 'schedule_notes', 'jungle_pathing',
+        'player_positions_snapshots', 'first_wards_data', 'all_wards_data',
+        'player_positions_timeline', 'objective_events'
+    }
+
+    if table_name not in ALLOWED_TABLES:
+        raise ValueError(f"Invalid table name: {table_name}. Must be one of {ALLOWED_TABLES}")
+
     columns_sql = []
     header_copy = list(header_list)
     pk_col_name_sql = primary_key_column.replace(" ", "_").replace(".", "").replace("-", "_")
@@ -77,17 +108,21 @@ def create_table_from_header(cursor, table_name, header_list, primary_key_column
         pk_sql += " AUTOINCREMENT"
     columns_sql.append(pk_sql)
 
-    try: header_copy.remove(primary_key_column)
+    try:
+        header_copy.remove(primary_key_column)
     except ValueError:
-         try: header_copy.remove(pk_col_name_sql)
-         except ValueError: print(f"Warning: Primary key '{primary_key_column}' or '{pk_col_name_sql}' not found in header for table '{table_name}'.")
+        try:
+            header_copy.remove(pk_col_name_sql)
+        except ValueError:
+            print(
+                f"Warning: Primary key '{primary_key_column}' or '{pk_col_name_sql}' not found in header for table '{table_name}'.")
 
     for header_name in header_copy:
         col_name_sql = header_name.replace(" ", "_").replace(".", "").replace("-", "_")
         col_type = "TEXT"
 
         is_scrims_numeric = table_name == "scrims" and \
-                           any(x in header_name for x in ["_K", "_D", "_A", "_Dmg", "_CS"])
+                            any(x in header_name for x in ["_K", "_D", "_A", "_Dmg", "_CS"])
         is_soloq_numeric = table_name == "soloq_games" and \
                            header_name in ["Win", "Timestamp", "Kills", "Deaths", "Assists"]
         is_tourn_numeric = table_name == "tournament_games" and \
@@ -98,8 +133,8 @@ def create_table_from_header(cursor, table_name, header_list, primary_key_column
         if is_scrims_numeric or is_soloq_numeric or is_tourn_numeric or is_manual_numeric:
             col_type = "INTEGER DEFAULT 0"
             if header_name == "game_index" and table_name == "manual_drafts":
-                 col_type = "INTEGER DEFAULT 1"
-        
+                col_type = "INTEGER DEFAULT 1"
+
         if table_name == "manual_drafts" and col_name_sql in ["filter_team_name", "game_index"]:
             col_type += " NOT NULL"
 
@@ -108,50 +143,52 @@ def create_table_from_header(cursor, table_name, header_list, primary_key_column
     create_table_sql = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({", ".join(columns_sql)});'
     try:
         cursor.execute(create_table_sql)
-        print(f"Таблица '{table_name}' успешно проверена/создана.")
+        print(f"Table '{table_name}' verified/created successfully.")
         return True
     except sqlite3.Error as e:
-        print(f"Ошибка при создании таблицы '{table_name}': {e}")
+        print(f"ERROR creating table '{table_name}': {e}")
         return False
 
+
 def init_db():
-    """Инициализирует базу данных: создает таблицы, если они не существуют."""
+    """Initializes the database: creates tables if they don't exist."""
     conn = get_db_connection()
     if conn is None:
-        print("Не удалось подключиться к БД для инициализации.")
+        print("ERROR: Could not connect to database for initialization.")
         return
 
     cursor = conn.cursor()
     try:
-        # --- Существующие таблицы ---
-        print("Проверка/создание таблицы scrims...")
+        # --- Existing tables ---
+        print("Checking/creating table scrims...")
         create_table_from_header(cursor, "scrims", SCRIMS_HEADER, primary_key_column="Game ID")
-        
-        print("Проверка/создание таблицы tournament_games...")
+
+        print("Checking/creating table tournament_games...")
         create_table_from_header(cursor, "tournament_games", TOURNAMENT_GAMES_HEADER, primary_key_column="Game ID")
-        
-        print("Проверка/создание таблицы soloq_games...")
+
+        print("Checking/creating table soloq_games...")
         create_table_from_header(cursor, "soloq_games", SOLOQ_GAMES_HEADER, primary_key_column="Match_ID")
 
-        print("Проверка/создание таблицы manual_drafts...")
+        print("Checking/creating table manual_drafts...")
         if create_table_from_header(cursor, "manual_drafts", MANUAL_DRAFTS_HEADER, primary_key_column="id"):
-             try:
-                 cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_drafts_team_game ON manual_drafts (filter_team_name, game_index);')
-                 print("Уникальный индекс для 'manual_drafts' (team, game_index) успешно проверен/создан.")
-             except sqlite3.Error as e:
-                 print(f"Ошибка при создании уникального индекса для 'manual_drafts': {e}")
-        
-        print("Проверка/создание таблицы schedule_entries...")
+            try:
+                cursor.execute(
+                    'CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_drafts_team_game ON manual_drafts (filter_team_name, game_index);')
+                print("Unique index for 'manual_drafts' (team, game_index) verified/created.")
+            except sqlite3.Error as e:
+                print(f"ERROR creating unique index for 'manual_drafts': {e}")
+
+        print("Checking/creating table schedule_entries...")
         create_schedule_sql = "CREATE TABLE IF NOT EXISTS schedule_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_date TEXT NOT NULL, entry_type TEXT NOT NULL, details_time TEXT, details_opponent TEXT, details_notes TEXT, color TEXT);"
         cursor.execute(create_schedule_sql)
-        print("Таблица 'schedule_entries' успешно проверена/создана.")
-        
-        print("Проверка/создание таблицы schedule_notes...")
+        print("Table 'schedule_entries' verified/created.")
+
+        print("Checking/creating table schedule_notes...")
         create_notes_sql = "CREATE TABLE IF NOT EXISTS schedule_notes (month_id TEXT PRIMARY KEY, notes_content TEXT DEFAULT '');"
         cursor.execute(create_notes_sql)
-        print("Таблица 'schedule_notes' (по месяцам) успешно проверена/создана.")
+        print("Table 'schedule_notes' (monthly) verified/created.")
 
-        print("Проверка/создание таблицы jungle_pathing...")
+        print("Checking/creating table jungle_pathing...")
         create_pathing_sql = """
         CREATE TABLE IF NOT EXISTS jungle_pathing (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,11 +203,11 @@ def init_db():
             cursor.execute(create_pathing_sql)
             cursor.execute(create_pathing_index_sql)
             cursor.execute(create_pathing_unique_sql)
-            print("Таблица 'jungle_pathing' и индексы успешно проверены/созданы.")
+            print("Table 'jungle_pathing' and indexes verified/created.")
         except sqlite3.Error as e:
-             print(f"Ошибка при создании таблицы/индексов 'jungle_pathing': {e}")
+            print(f"ERROR creating table/indexes 'jungle_pathing': {e}")
 
-        print("Проверка/создание таблицы player_positions_snapshots...")
+        print("Checking/creating table player_positions_snapshots...")
         create_positions_sql = """
         CREATE TABLE IF NOT EXISTS player_positions_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -185,11 +222,11 @@ def init_db():
             cursor.execute(create_positions_sql)
             cursor.execute(create_positions_index_sql)
             cursor.execute(create_positions_unique_sql)
-            print("Таблица 'player_positions_snapshots' и индексы успешно проверены/созданы.")
+            print("Table 'player_positions_snapshots' and indexes verified/created.")
         except sqlite3.Error as e:
-            print(f"Ошибка при создании таблицы/индексов 'player_positions_snapshots': {e}")
+            print(f"ERROR creating table/indexes 'player_positions_snapshots': {e}")
 
-        print("Проверка/создание таблицы first_wards_data...")
+        print("Checking/creating table first_wards_data...")
         create_first_wards_sql = """
         CREATE TABLE IF NOT EXISTS first_wards_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -210,11 +247,11 @@ def init_db():
             cursor.execute(create_first_wards_sql)
             cursor.execute(create_first_wards_unique_sql)
             cursor.execute(create_first_wards_game_id_index_sql)
-            print("Таблица 'first_wards_data' и индексы успешно проверены/созданы (с колонкой player_name).")
+            print("Table 'first_wards_data' and indexes verified/created (with player_name column).")
         except sqlite3.Error as e:
-            print(f"Ошибка при создании таблицы/индексов 'first_wards_data': {e}")
-        
-        print("Проверка/создание таблицы all_wards_data...")
+            print(f"ERROR creating table/indexes 'first_wards_data': {e}")
+
+        print("Checking/creating table all_wards_data...")
         create_all_wards_sql = """
         CREATE TABLE IF NOT EXISTS all_wards_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,11 +275,11 @@ def init_db():
             cursor.execute(create_all_wards_game_id_index_sql)
             cursor.execute(create_all_wards_puuid_index_sql)
             cursor.execute(create_all_wards_timestamp_index_sql)
-            print("Таблица 'all_wards_data' и индексы успешно проверены/созданы.")
+            print("Table 'all_wards_data' and indexes verified/created.")
         except sqlite3.Error as e:
-            print(f"Ошибка при создании таблицы/индексов 'all_wards_data': {e}")
+            print(f"ERROR creating table/indexes 'all_wards_data': {e}")
 
-        print("Проверка/создание таблицы player_positions_timeline...")
+        print("Checking/creating table player_positions_timeline...")
         create_positions_timeline_sql = """
         CREATE TABLE IF NOT EXISTS player_positions_timeline (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -263,51 +300,46 @@ def init_db():
             cursor.execute(create_timeline_game_id_index_sql)
             cursor.execute(create_timeline_timestamp_index_sql)
             cursor.execute(create_timeline_game_puuid_index_sql)
-            print("Таблица 'player_positions_timeline' и индексы успешно проверены/созданы.")
+            print("Table 'player_positions_timeline' and indexes verified/created.")
         except sqlite3.Error as e:
-            print(f"Ошибка при создании таблицы/индексов 'player_positions_timeline': {e}")
-            
-        # <<< НОВАЯ ТАБЛИЦА ДЛЯ ОБЪЕКТОВ >>>
-        print("Проверка/создание таблицы objective_events...")
+            print(f"ERROR creating table/indexes 'player_positions_timeline': {e}")
+
+        print("Checking/creating table objective_events...")
         create_objectives_sql = """
         CREATE TABLE IF NOT EXISTS objective_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             game_id TEXT NOT NULL,
             timestamp_ms INTEGER NOT NULL,
-            objective_type TEXT NOT NULL,     -- 'DRAGON', 'BARON', 'HERALD', 'TOWER', 'VOIDGRUB'
-            objective_subtype TEXT,           -- 'FIRE', 'WATER', 'OUTER', 'INNER' etc.
-            team_id INTEGER,                  -- 100 for Blue, 200 for Red
+            objective_type TEXT NOT NULL,
+            objective_subtype TEXT,
+            team_id INTEGER,
             killer_participant_id INTEGER,
-            lane TEXT                         -- 'TOP_LANE', 'MID_LANE', 'BOT_LANE' for towers
+            lane TEXT
         );
         """
-        # Индексы для ускорения выборок
         create_objectives_game_id_index = "CREATE INDEX IF NOT EXISTS idx_objectives_game_id ON objective_events (game_id);"
         create_objectives_type_index = "CREATE INDEX IF NOT EXISTS idx_objectives_type ON objective_events (objective_type);"
         try:
             cursor.execute(create_objectives_sql)
             cursor.execute(create_objectives_game_id_index)
             cursor.execute(create_objectives_type_index)
-            print("Таблица 'objective_events' и индексы успешно проверены/созданы.")
+            print("Table 'objective_events' and indexes verified/created.")
         except sqlite3.Error as e:
-            print(f"Ошибка при создании таблицы/индексов 'objective_events': {e}")
+            print(f"ERROR creating table/indexes 'objective_events': {e}")
 
         conn.commit()
+        print("Database initialization completed successfully.")
     except sqlite3.Error as e:
-        print(f"Ошибка при инициализации БД: {e}")
+        print(f"ERROR during database initialization: {e}")
         conn.rollback()
     finally:
         conn.close()
 
 
 if __name__ == '__main__':
-    print(f"!!! ВНИМАНИЕ: Обновлена схема таблицы 'tournament_games' (добавлены PUUID/PartID).")
-    print(f"!!! ВНИМАНИЕ: Добавлены новые таблицы 'jungle_pathing', 'player_positions_snapshots'.")
-    print(f"!!! ВНИМАНИЕ: В таблицу 'first_wards_data' добавлена колонка 'player_name'.")
-    print(f"!!! ВНИМАНИЕ: Добавлена новая таблица 'all_wards_data'.")
-    print(f"!!! ВНИМАНИЕ: Добавлена новая таблица 'player_positions_timeline' для Proximity.")
-    print(f"!!! Если приложение после обновления выдает ошибки БД,")
-    print(f"!!! попробуйте удалить старый файл БД: {DATABASE_PATH}")
-    print(f"!!! и перезапустить приложение для создания новой БД.")
+    print(f"!!! Database path: {DATABASE_PATH}")
+    print(f"!!! NOTICE: Schema includes tournament_games with PUUID/PartID columns.")
+    print(f"!!! NOTICE: New tables for jungle_pathing, player_positions_snapshots, wards, and objectives.")
+    print(f"!!! If errors occur after update, consider deleting old database file and restarting.")
     init_db()
-    print("Инициализация базы данных завершена.")
+    print("Database initialization script completed.")

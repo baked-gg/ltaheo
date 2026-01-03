@@ -45,12 +45,12 @@ from soloq_logic import (
 from start_positions_logic import get_start_positions_data
 from jng_clear_logic import get_jng_clear_data
 from objects_logic import get_objects_data
-# <<< НОВЫЙ ИМПОРТ ДЛЯ SWAP
+from config import config
 from swap_logic import get_swap_data
 
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "a_default_secret_key_change_me")
+app.config['SECRET_KEY'] = config.flask.secret_key
 app.jinja_env.globals.update(min=min, max=max)
 
 with app.app_context(): init_db()
